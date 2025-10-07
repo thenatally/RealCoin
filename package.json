@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev --port 7070",
-    "buildExternal": "tsc server/db.ts server/server.ts --target es2022 --module es2022 --lib es2022 --moduleResolution node --esModuleInterop --skipLibCheck --forceConsistentCasingInFileNames --outDir serverOut --declaration --sourceMap",
-    "build": "vite build && npm run buildExternal",
+    "buildExternal": "tsc serversrc/db.ts serversrc/server.ts --target es2022 --module es2022 --lib es2022 --moduleResolution node --esModuleInterop --skipLibCheck --forceConsistentCasingInFileNames --outDir serverOut --declaration --sourceMap",
+    "build": "vite build",
     "preview": "vite preview",
     "start": "node --env-file .env serverOut/server.js",
     "proxy": "node --env-file .env serverOut/server.js --proxy",

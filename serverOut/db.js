@@ -3,7 +3,6 @@ import fs from 'fs/promises';
 import path from 'path';
 const isDev = process.env.NODE_ENV === 'development' || process.env.VITE_DEV_SERVER_URL;
 const surrealDb = new Surreal();
-
 async function connectDB() {
     console.log('Connecting to DB at ', process.env.SURREAL_URI);
     while (true) {
@@ -17,7 +16,6 @@ async function connectDB() {
             break;
         }
         catch (error) {
-            
             console.log('Waiting for DB...');
             await new Promise((resolve) => setTimeout(resolve, 2500));
         }
@@ -52,7 +50,6 @@ export class DBSingleton {
         };
     }
     async notifyChange(data) {
-        
         await Promise.allSettled(this.changeCallbacks.map(async (callback) => {
             try {
                 await callback(data);
@@ -82,7 +79,6 @@ export class DBSingleton {
             value: patch
         });
         await writeDevJson(this.recordId, { value: patch });
-        
         const updatedData = await this.get();
         await this.notifyChange(updatedData);
     }
@@ -112,7 +108,6 @@ export class DBMap {
         };
     }
     async notifyChange(key, data) {
-        
         await Promise.allSettled(this.changeCallbacks.map(async (callback) => {
             try {
                 await callback(key, data);

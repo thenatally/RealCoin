@@ -7,6 +7,8 @@ export default defineConfig({
 	server: {
 		watch: {
 			ignored: ['**/dev_db/**']
-		}
+		},
+		
+		allowedHosts:true
 	}
 });

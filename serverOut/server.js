@@ -16,14 +16,10 @@ const wss = new WebSocketServer({ noServer: true });
 import { DBMap } from './db.js';
 import z from 'zod';
 import { createHash } from 'crypto';
-
 const rooms = new Map();
 const clientRooms = new Map();
-
 function addClientToRoom(ws, roomId) {
-    
     removeClientFromRoom(ws);
-    
     if (!rooms.has(roomId)) {
         rooms.set(roomId, new Set());
     }
@@ -36,7 +32,6 @@ function removeClientFromRoom(ws) {
         const roomClients = rooms.get(currentRoom);
         if (roomClients) {
             roomClients.delete(ws);
-            
             if (roomClients.size === 0) {
                 rooms.delete(currentRoom);
             }
@@ -128,7 +123,6 @@ const tokenDB = new DBMap('tokens', z.object({
     })
         .optional()
 }), null);
-
 const coinSchema = z.object({
     id: z.string(),
     name: z.string(),
@@ -160,8 +154,8 @@ const tradeSchema = z.object({
 const portfolioSchema = z.object({
     cash: z.number(),
     holdings: z.record(z.string(), z.object({
-        amount: z.number(), 
-        averageCost: z.number() 
+        amount: z.number(),
+        averageCost: z.number()
     }))
 });
 const botSchema = z.object({
@@ -179,13 +173,11 @@ const botSchema = z.object({
         }))
     })
 });
-
 const coinsDB = new DBMap('coins', coinSchema, null);
 const ordersDB = new DBMap('orders', orderSchema, null);
 const tradesDB = new DBMap('trades', tradeSchema, null);
 const portfoliosDB = new DBMap('portfolios', portfolioSchema, null);
 const botsDB = new DBMap('bots', botSchema, null);
-
 const priceHistorySchema = z.object({
     coinId: z.string(),
     timeframe: z.enum(['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']),
@@ -198,34 +190,30 @@ const priceHistorySchema = z.object({
 });
 const priceHistoryDB = new DBMap('priceHistory', priceHistorySchema, null);
 class PriceHistoryManager {
-    priceData = new Map(); 
+    priceData = new Map();
     constructor() {
-        
     }
     async recordPrice(coinId, price, volume = 0) {
         const timestamp = new Date();
-        
         if (!this.priceData.has(coinId)) {
             this.priceData.set(coinId, []);
         }
         const data = this.priceData.get(coinId);
         data.push({ price, timestamp, volume });
-        
         if (data.length > 14400) {
             data.splice(0, data.length - 14400);
         }
     }
-    
     getTimeframeInterval(timeframe) {
         switch (timeframe) {
-            case '1m': return 1; 
-            case '5m': return 5; 
-            case '15m': return 15; 
-            case '30m': return 30; 
-            case '1h': return 60; 
-            case '4h': return 240; 
-            case '1d': return 1440; 
-            case '1w': return 10080; 
+            case '1m': return 1;
+            case '5m': return 5;
+            case '15m': return 15;
+            case '30m': return 30;
+            case '1h': return 60;
+            case '4h': return 240;
+            case '1d': return 1440;
+            case '1w': return 10080;
             default: return 1;
         }
     }
@@ -236,27 +224,20 @@ class PriceHistoryManager {
                 console.log(`No price data found for ${coinId}`);
                 return [];
             }
-            
             limit = Math.min(limit, 100);
             const intervalSeconds = this.getTimeframeInterval(timeframe);
             const now = new Date();
             const results = [];
-            
             const sortedData = [...priceData].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-            
             const latestDataTime = sortedData.length > 0 ? sortedData[0].timestamp : now;
-            
             for (let i = 0; i < limit; i++) {
                 const endTime = new Date(latestDataTime.getTime() - (i * intervalSeconds * 1000));
                 const startTime = new Date(endTime.getTime() - (intervalSeconds * 1000));
-                
                 const intervalPrices = sortedData.filter(p => p.timestamp >= startTime && p.timestamp < endTime);
                 if (intervalPrices.length > 0) {
-                    
                     intervalPrices.reverse();
                     const prices = intervalPrices.map(p => p.price);
                     const volumes = intervalPrices.map(p => p.volume);
-                    
                     const open = prices[0] || 1.0;
                     const close = prices[prices.length - 1] || open;
                     const high = prices.length > 0 ? Math.max(...prices) : open;
@@ -274,10 +255,8 @@ class PriceHistoryManager {
                     });
                 }
                 else {
-                    
                     let fallbackPrice = 1.0;
                     if (sortedData.length > 0) {
-                        
                         const closestData = sortedData.find(p => p.timestamp <= endTime);
                         fallbackPrice = closestData ? closestData.price : sortedData[sortedData.length - 1].price;
                     }
@@ -323,92 +302,69 @@ class Coin {
     applyPriceImpact(tradeVolume, side, priceHistoryManager) {
         if (!Number.isFinite(tradeVolume) || tradeVolume <= 0)
             return this.price;
-        
         const liquidityDepth = this.liquidity;
-        const baseImpact = 0.05; 
-        
+        const baseImpact = 0.05;
         const relativeSize = tradeVolume / liquidityDepth;
-        
         let impactMultiplier;
         if (relativeSize < 0.01) {
-            
             impactMultiplier = relativeSize * 0.5;
         }
         else if (relativeSize < 0.1) {
-            
             impactMultiplier = relativeSize;
         }
         else {
-            
             impactMultiplier = 0.1 + Math.pow(relativeSize - 0.1, 1.3);
         }
-        
         const impact = baseImpact * impactMultiplier * (side === 'buy' ? 1 : -1);
         const multiplier = Math.exp(impact);
         const newPrice = this.price * multiplier;
-        
         if (Number.isFinite(newPrice) && newPrice > 0 && newPrice < 1e12) {
             this.price = newPrice;
-            
             const liquidityConsumption = Math.min(tradeVolume * 0.1, liquidityDepth * 0.05);
             this.liquidity = Math.max(liquidityDepth * 0.5, liquidityDepth - liquidityConsumption);
-            
             setTimeout(() => {
                 this.liquidity = Math.min(liquidityDepth, this.liquidity + liquidityConsumption * 0.1);
             }, 5000);
         }
         this.lastUpdated = new Date();
-        
         if (priceHistoryManager) {
             priceHistoryManager.recordPrice(this.id, this.price, tradeVolume);
         }
         return this.price;
     }
     addVolatility(priceHistoryManager) {
-        
-        const dt = 0.001; 
-        
+        const dt = 0.001;
         const u1 = Math.random();
         const u2 = Math.random();
         const z0 = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-        
-        const drift = -0.0001; 
+        const drift = -0.0001;
         const diffusion = this.baseVol * Math.sqrt(dt) * z0;
         const baseChange = Math.exp((drift - 0.5 * this.baseVol * this.baseVol) * dt + diffusion);
-        
         let jumpComponent = 1.0;
         if (Math.random() < 0.002) {
-            
-            const jumpIntensity = this.baseVol * 5; 
+            const jumpIntensity = this.baseVol * 5;
             const jumpDirection = Math.random() < 0.5 ? -1 : 1;
             jumpComponent = 1 + (jumpDirection * jumpIntensity * Math.random());
         }
-        
         let newPrice = this.price * baseChange * jumpComponent;
-        
-        const longTermPrice = 1.0; 
+        const longTermPrice = 1.0;
         const reversionStrength = 0.0001;
         const reversionFactor = 1 - reversionStrength * Math.log(newPrice / longTermPrice);
         newPrice *= reversionFactor;
-        
         if (Number.isFinite(newPrice) && newPrice > 0.00001 && newPrice < 1e6) {
             this.price = newPrice;
         }
         else {
-            
             this.price = Math.max(0.001, Math.min(1000, this.price));
         }
         this.lastUpdated = new Date();
-        
         if (priceHistoryManager) {
-            
             const priceChange = Math.abs(baseChange * jumpComponent - 1);
             const estimatedVolume = priceChange * this.liquidity * 0.1;
             priceHistoryManager.recordPrice(this.id, this.price, estimatedVolume);
         }
     }
     async save() {
-        
         const validatedData = {
             id: this.id,
             name: this.name,
@@ -417,7 +373,6 @@ class Coin {
             liquidity: Number.isFinite(this.liquidity) && this.liquidity > 0 && this.liquidity < 1e9 ? this.liquidity : 1000,
             lastUpdated: this.lastUpdated
         };
-        
         this.price = validatedData.price;
         this.baseVol = validatedData.baseVol;
         this.liquidity = validatedData.liquidity;
@@ -761,8 +716,8 @@ class Bot {
     id;
     personality;
     traits;
-    targetCoin; 
-    watchedCoins; 
+    targetCoin;
+    watchedCoins;
     parameters;
     lastAction;
     enabled;
@@ -776,8 +731,6 @@ class Bot {
         this.lastAction = data.lastAction;
         this.enabled = data.enabled;
         this.portfolio = data.portfolio;
-        
-        
         this.watchedCoins = data.watchedCoins || [data.targetCoin];
     }
     getRandomPersonality() {
@@ -789,9 +742,8 @@ class Bot {
             return;
         const now = new Date();
         const timeSinceLastAction = now.getTime() - this.lastAction.getTime();
-        
-        const baseInterval = 60000 / Math.max(0.1, this.traits.frequency); 
-        const jitter = baseInterval * (0.5 + Math.random()); 
+        const baseInterval = 60000 / Math.max(0.1, this.traits.frequency);
+        const jitter = baseInterval * (0.5 + Math.random());
         const minInterval = baseInterval + jitter;
         if (timeSinceLastAction < minInterval)
             return;
@@ -804,9 +756,7 @@ class Bot {
         }
     }
     async tradeWithPersonality(marketState) {
-        
         this.updateMarketHistory(marketState);
-        
         const newFocus = this.shouldSwitchFocus(marketState);
         if (newFocus) {
             this.targetCoin = newFocus;
@@ -919,7 +869,6 @@ class Bot {
                 break;
         }
     }
-    
     async momentumMaxineTrade(marketState) {
         const coin = marketState.getCoin(this.targetCoin);
         if (!coin)
@@ -932,7 +881,7 @@ class Bot {
         if (this.parameters.priceHistory.length < 3)
             return;
         const pctChange = this.getPriceChangePercent(coin, 10);
-        const threshold = 0.5; 
+        const threshold = 0.5;
         if (pctChange > threshold) {
             await this.makeTrade(marketState, coin, 'buy', this.getTradeSize(coin, 'aggressive'));
         }
@@ -940,7 +889,6 @@ class Bot {
             await this.makeTrade(marketState, coin, 'sell', this.getTradeSize(coin, 'aggressive'));
         }
     }
-    
     async meanRevertorMarvinTrade(marketState) {
         const coin = marketState.getCoin(this.targetCoin);
         if (!coin)
@@ -955,17 +903,14 @@ class Bot {
         const movingAvg = this.getMovingAverage(50);
         const diff = (coin.price - movingAvg) / movingAvg;
         if (diff < -0.05) {
-            
             await this.makeTrade(marketState, coin, 'buy', this.getTradeSize(coin, 'huge'));
         }
         else if (diff > 0.05) {
-            
             await this.makeTrade(marketState, coin, 'sell', this.getTradeSize(coin, 'huge'));
         }
     }
-    
     async whaleWendyTrade(marketState) {
-        if (Math.random() < 0.01) { 
+        if (Math.random() < 0.01) {
             const coin = marketState.getCoin(this.targetCoin);
             if (!coin)
                 return;
@@ -973,7 +918,6 @@ class Bot {
             await this.makeTrade(marketState, coin, side, this.getTradeSize(coin, 'whale'));
         }
     }
-    
     async patternProphetTrade(marketState) {
         const coin = marketState.getCoin(this.targetCoin);
         if (!coin)
@@ -994,7 +938,6 @@ class Bot {
             await this.makeTrade(marketState, coin, 'sell', this.getTradeSize(coin, 'small'));
         }
     }
-    
     async stoplossSteveTrade(marketState) {
         const coin = marketState.getCoin(this.targetCoin);
         if (!coin)
@@ -1002,61 +945,50 @@ class Bot {
         if (!this.parameters.entryPrice)
             this.parameters.entryPrice = coin.price;
         const pctChange = this.getPriceChangePercent(coin, 5);
-        
         if (coin.price < this.parameters.entryPrice * 0.97) {
             const holding = this.portfolio.holdings[coin.id];
             if (holding && holding.amount > 0) {
                 await this.makeTrade(marketState, coin, 'sell', holding.amount);
-                this.parameters.entryPrice = coin.price; 
+                this.parameters.entryPrice = coin.price;
             }
         }
-        
         if (pctChange > 2) {
             await this.makeTrade(marketState, coin, 'buy', this.getTradeSize(coin, 'small'));
             this.parameters.entryPrice = coin.price;
         }
     }
-    
     async copycatCarlaTrade(marketState) {
-        
         const bestCoin = this.getBestPerformingCoin(marketState);
         if (!bestCoin)
             return;
         const bestHistory = this.parameters.marketHistory?.[bestCoin.id] || [];
         if (bestHistory.length < 5)
             return;
-        
         const recentTrend = bestHistory.slice(-3);
         const isUptrend = recentTrend.every((price, i) => i === 0 || price >= recentTrend[i - 1]);
         const isDowntrend = recentTrend.every((price, i) => i === 0 || price <= recentTrend[i - 1]);
-        
         if (isUptrend && Math.random() < 0.4) {
-            
             const targetCoin = marketState.getCoin(this.targetCoin);
             if (targetCoin) {
                 await this.makeTrade(marketState, targetCoin, 'buy', this.getTradeSize(targetCoin, 'small'));
             }
         }
         else if (isDowntrend && Math.random() < 0.3) {
-            
             const targetCoin = marketState.getCoin(this.targetCoin);
             if (targetCoin && this.portfolio.holdings[this.targetCoin]?.amount > 0) {
                 await this.makeTrade(marketState, targetCoin, 'sell', this.getTradeSize(targetCoin, 'small'));
             }
         }
         else if (Math.random() < 0.2) {
-            
             if (this.portfolio.cash > bestCoin.price * 5) {
                 await this.makeTrade(marketState, bestCoin, 'buy', this.getTradeSize(bestCoin, 'small'));
             }
         }
     }
-    
     async contrarianCarlTrade(marketState) {
         const coin = marketState.getCoin(this.targetCoin);
         if (!coin)
             return;
-        
         const pctChange = this.getPriceChangePercent(coin, 10);
         if (pctChange > 3) {
             await this.makeTrade(marketState, coin, 'sell', this.getTradeSize(coin, 'moderate'));
@@ -1065,18 +997,15 @@ class Bot {
             await this.makeTrade(marketState, coin, 'buy', this.getTradeSize(coin, 'moderate'));
         }
     }
-    
     async fomoFionaTrade(marketState) {
         const coin = marketState.getCoin(this.targetCoin);
         if (!coin)
             return;
         const pctChange = this.getPriceChangePercent(coin, 5);
-        
         if (pctChange > 10) {
             await this.makeTrade(marketState, coin, 'buy', this.getTradeSize(coin, 'aggressive'));
             this.parameters.fomoEntry = coin.price;
         }
-        
         if (this.parameters.fomoEntry && coin.price < this.parameters.fomoEntry * 0.95) {
             const holding = this.portfolio.holdings[coin.id];
             if (holding && holding.amount > 0) {
@@ -1085,7 +1014,6 @@ class Bot {
             }
         }
     }
-    
     async longtermLarryTrade(marketState) {
         const coin = marketState.getCoin(this.targetCoin);
         if (!coin)
@@ -1093,11 +1021,9 @@ class Bot {
         if (!this.parameters.avgBuyPrice)
             this.parameters.avgBuyPrice = coin.price;
         const pctChange = this.getPriceChangePercent(coin, 100);
-        
         if (pctChange < -10) {
             await this.makeTrade(marketState, coin, 'buy', this.getTradeSize(coin, 'aggressive'));
         }
-        
         if (coin.price > this.parameters.avgBuyPrice * 2) {
             const holding = this.portfolio.holdings[coin.id];
             if (holding && holding.amount > 0) {
@@ -1105,19 +1031,15 @@ class Bot {
             }
         }
     }
-    
     async apeAlexTrade(marketState) {
         const coin = marketState.getCoin(this.targetCoin);
         if (!coin)
             return;
-        
         if (Math.random() < 0.3) {
             await this.makeTrade(marketState, coin, 'buy', this.getTradeSize(coin, 'aggressive'));
         }
     }
-    
     async quantQuinnTrade(marketState) {
-        
         const coinAnalysis = [];
         for (const coinId of this.watchedCoins) {
             const coin = marketState.getCoin(coinId);
@@ -1126,41 +1048,33 @@ class Bot {
             const history = this.parameters.marketHistory?.[coinId] || [];
             if (history.length < 20)
                 continue;
-            
             const maFast = history.slice(-5).reduce((a, b) => a + b, 0) / 5;
             const maSlow = history.slice(-20).reduce((a, b) => a + b, 0) / 20;
             const rsi = this.calculateRSI(history);
             const volatility = this.calculateVolatility(history);
-            
             let signal = 0;
             let strength = 0;
-            
             if (maFast > maSlow)
                 signal += 0.4;
             else
                 signal -= 0.4;
-            
             if (rsi < 30)
-                signal += 0.3; 
+                signal += 0.3;
             else if (rsi > 70)
-                signal -= 0.3; 
-            
-            signal += (volatility - 0.02) * 5; 
+                signal -= 0.3;
+            signal += (volatility - 0.02) * 5;
             strength = Math.abs(signal);
             coinAnalysis.push({ coin, signal, strength });
         }
-        
         coinAnalysis.sort((a, b) => b.strength - a.strength);
         for (let i = 0; i < Math.min(2, coinAnalysis.length); i++) {
             const analysis = coinAnalysis[i];
             if (analysis.strength < 0.5)
-                break; 
+                break;
             if (analysis.signal > 0.5) {
-                
                 await this.makeTrade(marketState, analysis.coin, 'buy', this.getTradeSize(analysis.coin, 'moderate'));
             }
             else if (analysis.signal < -0.5 && this.portfolio.holdings[analysis.coin.id]?.amount > 0) {
-                
                 await this.makeTrade(marketState, analysis.coin, 'sell', this.getTradeSize(analysis.coin, 'moderate'));
             }
         }
@@ -1192,13 +1106,9 @@ class Bot {
         const variance = returns.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / returns.length;
         return Math.sqrt(variance);
     }
-    
     async doomDanielTrade(marketState) {
-        
         const marketSentiment = this.getMarketSentiment(marketState);
-        
         if (marketSentiment === 'bullish') {
-            
             for (const coinId of this.watchedCoins) {
                 const coin = marketState.getCoin(coinId);
                 if (coin && this.portfolio.holdings[coinId]?.amount > 0) {
@@ -1207,16 +1117,13 @@ class Bot {
             }
         }
         else if (marketSentiment === 'bearish') {
-            
             if (Math.random() < 0.3) {
-                
                 const worstCoin = this.getWorstPerformingCoin(marketState);
                 if (worstCoin) {
                     await this.makeTrade(marketState, worstCoin, 'buy', this.getTradeSize(worstCoin, 'small'));
                 }
             }
             else {
-                
                 const coin = marketState.getCoin(this.targetCoin);
                 if (coin) {
                     await this.makeTrade(marketState, coin, 'sell', this.getTradeSize(coin, 'tiny'));
@@ -1224,20 +1131,16 @@ class Bot {
             }
         }
     }
-    
     async lazyLisaTrade(marketState) {
         const coin = marketState.getCoin(this.targetCoin);
         if (!coin)
             return;
-        
         if (Math.random() < 0.05) {
             const side = Math.random() < 0.5 ? 'buy' : 'sell';
             await this.makeTrade(marketState, coin, side, this.getTradeSize(coin, 'tiny'));
         }
     }
-    
     async arbitrageArnieTrade(marketState) {
-        
         let bestBuy = null;
         let bestSell = null;
         for (const coinId of this.watchedCoins) {
@@ -1247,23 +1150,20 @@ class Bot {
             const priceHistory = this.parameters.marketHistory?.[coinId] || [];
             if (priceHistory.length < 10)
                 continue;
-            
             const recentAvg = priceHistory.slice(-5).reduce((a, b) => a + b, 0) / 5;
             const longerAvg = priceHistory.slice(-10).reduce((a, b) => a + b, 0) / 10;
             const deviation = (coin.price - longerAvg) / longerAvg;
-            
-            if (deviation < -0.03) { 
+            if (deviation < -0.03) {
                 if (!bestBuy || Math.abs(deviation) > Math.abs(bestBuy.score)) {
                     bestBuy = { coin, score: deviation };
                 }
             }
-            else if (deviation > 0.03) { 
+            else if (deviation > 0.03) {
                 if (!bestSell || Math.abs(deviation) > Math.abs(bestSell.score)) {
                     bestSell = { coin, score: deviation };
                 }
             }
         }
-        
         if (bestSell && this.portfolio.holdings[bestSell.coin.id]?.amount > 0) {
             await this.makeTrade(marketState, bestSell.coin, 'sell', this.getTradeSize(bestSell.coin, 'moderate'));
         }
@@ -1271,17 +1171,13 @@ class Bot {
             await this.makeTrade(marketState, bestBuy.coin, 'buy', this.getTradeSize(bestBuy.coin, 'moderate'));
         }
     }
-    
     async influencerIzzyTrade(marketState) {
-        
         if (Math.random() < 0.001) {
-            
             const campaign = Math.random();
             if (campaign < 0.3) {
-                
                 console.log(`🌊 ${this.traits.name}: ALTCOIN SEASON IS HERE! Time to diversify! 🌊`);
                 for (const coinId of this.watchedCoins) {
-                    if (coinId !== 'RCOIN') { 
+                    if (coinId !== 'RCOIN') {
                         const coin = marketState.getCoin(coinId);
                         if (coin && this.portfolio.cash > coin.price * 20) {
                             await this.makeTrade(marketState, coin, 'buy', this.getTradeSize(coin, 'aggressive'));
@@ -1291,7 +1187,6 @@ class Bot {
                 this.parameters.campaignType = 'altseason';
             }
             else if (campaign < 0.6) {
-                
                 console.log(`💀 ${this.traits.name}: MAJOR CORRECTION INCOMING! Take profits NOW! 💀`);
                 for (const coinId of this.watchedCoins) {
                     const coin = marketState.getCoin(coinId);
@@ -1302,7 +1197,6 @@ class Bot {
                 this.parameters.campaignType = 'crash';
             }
             else {
-                
                 const bestCoin = this.getBestPerformingCoin(marketState) || marketState.getCoin(this.targetCoin);
                 if (bestCoin) {
                     console.log(`🚀🚀 ${this.traits.name}: ${bestCoin.name} IS THE NEXT 100X! GET IN NOW! 🚀🚀`);
@@ -1311,13 +1205,11 @@ class Bot {
                     this.parameters.campaignType = 'pump';
                 }
             }
-            this.parameters.campaignActive = 5; 
+            this.parameters.campaignActive = 5;
         }
         else if (this.parameters.campaignActive > 0) {
             this.parameters.campaignActive--;
-            
             if (this.parameters.campaignType === 'pump' && this.parameters.pumpedCoin && Math.random() < 0.3) {
-                
                 const coin = marketState.getCoin(this.parameters.pumpedCoin);
                 if (coin && this.portfolio.holdings[this.parameters.pumpedCoin]?.amount > 0) {
                     await this.makeTrade(marketState, coin, 'sell', this.getTradeSize(coin, 'whale'));
@@ -1325,7 +1217,6 @@ class Bot {
             }
         }
     }
-    
     getPriceChangePercent(coin, periods) {
         if (!this.parameters.priceHistory || this.parameters.priceHistory.length < periods) {
             return 0;
@@ -1365,7 +1256,7 @@ class Bot {
     }
     getTradeSize(coin, intensity) {
         const aggressiveness = this.traits.aggressiveness / 10;
-        const baseSize = 0.05; 
+        const baseSize = 0.05;
         let multiplier = 1;
         switch (intensity) {
             case 'tiny':
@@ -1405,11 +1296,9 @@ class Bot {
         }
     }
     async executeTrade(marketState, coin, side, amount) {
-        
         if (!Number.isFinite(amount) || amount <= 0 || amount > 1e12) {
             return;
         }
-        
         const cost = amount * coin.price;
         if (!Number.isFinite(cost) || cost > 1e15) {
             return;
@@ -1417,11 +1306,9 @@ class Bot {
         if (side === 'buy') {
             if (this.portfolio.cash < cost)
                 return;
-            
             this.portfolio.cash -= cost;
             const currentHolding = this.portfolio.holdings[coin.id];
             if (currentHolding) {
-                
                 const totalValue = (currentHolding.amount * currentHolding.averageCost) + cost;
                 const totalAmount = currentHolding.amount + amount;
                 this.portfolio.holdings[coin.id] = {
@@ -1430,20 +1317,17 @@ class Bot {
                 };
             }
             else {
-                
                 this.portfolio.holdings[coin.id] = {
                     amount: amount,
                     averageCost: coin.price
                 };
             }
-            
             coin.applyPriceImpact(amount, side, marketState.priceHistoryManager);
         }
         else {
             const currentHolding = this.portfolio.holdings[coin.id];
             if (!currentHolding || currentHolding.amount < amount)
                 return;
-            
             this.portfolio.cash += cost;
             const remainingAmount = currentHolding.amount - amount;
             if (remainingAmount <= 0.000001) {
@@ -1455,13 +1339,10 @@ class Bot {
                     averageCost: currentHolding.averageCost
                 };
             }
-            
             coin.applyPriceImpact(amount, side, marketState.priceHistoryManager);
         }
-        
         await this.save();
     }
-    
     getMarketSentiment(marketState) {
         const coins = Array.from(marketState.coins.values());
         let totalChange = 0;
@@ -1533,61 +1414,51 @@ class Bot {
                 this.parameters.marketHistory[coinId] = [];
             }
             this.parameters.marketHistory[coinId].push(coin.price);
-            
             if (this.parameters.marketHistory[coinId].length > 100) {
                 this.parameters.marketHistory[coinId].shift();
             }
         }
     }
-    
     shouldSwitchFocus(marketState) {
         if (Math.random() > 0.1)
-            return null; 
+            return null;
         const currentCoin = marketState.getCoin(this.targetCoin);
         if (!currentCoin)
             return null;
         const bestCoin = this.getBestPerformingCoin(marketState);
         if (!bestCoin || bestCoin.id === this.targetCoin)
             return null;
-        
         const currentHistory = this.parameters.marketHistory?.[this.targetCoin] || [];
         const bestHistory = this.parameters.marketHistory?.[bestCoin.id] || [];
         if (currentHistory.length >= 10 && bestHistory.length >= 10) {
             const currentPerf = (currentCoin.price - currentHistory[currentHistory.length - 10]) / currentHistory[currentHistory.length - 10];
             const bestPerf = (bestCoin.price - bestHistory[bestHistory.length - 10]) / bestHistory[bestHistory.length - 10];
-            if (bestPerf - currentPerf > 0.05) { 
+            if (bestPerf - currentPerf > 0.05) {
                 return bestCoin.id;
             }
         }
         return null;
     }
-    
-    
     async scalperSallyTrade(marketState) {
-        
-        for (const coinId of this.watchedCoins.slice(0, 3)) { 
+        for (const coinId of this.watchedCoins.slice(0, 3)) {
             const coin = marketState.getCoin(coinId);
             if (!coin)
                 continue;
             const history = this.parameters.marketHistory?.[coinId] || [];
             if (history.length < 5)
                 continue;
-            
             const recentChange = (coin.price - history[history.length - 2]) / history[history.length - 2];
             if (Math.abs(recentChange) > 0.001 && Math.abs(recentChange) < 0.003) {
-                
                 const side = recentChange > 0 ? 'buy' : 'sell';
                 await this.makeTrade(marketState, coin, side, this.getTradeSize(coin, 'tiny'));
-                
                 this.parameters[`scalp_${coinId}`] = { side, entry: coin.price, timestamp: Date.now() };
             }
-            
             const scalpPos = this.parameters[`scalp_${coinId}`];
-            if (scalpPos && Date.now() - scalpPos.timestamp < 30000) { 
+            if (scalpPos && Date.now() - scalpPos.timestamp < 30000) {
                 const profitPct = scalpPos.side === 'buy'
                     ? (coin.price - scalpPos.entry) / scalpPos.entry
                     : (scalpPos.entry - coin.price) / scalpPos.entry;
-                if (profitPct > 0.002 || profitPct < -0.001) { 
+                if (profitPct > 0.002 || profitPct < -0.001) {
                     const exitSide = scalpPos.side === 'buy' ? 'sell' : 'buy';
                     await this.makeTrade(marketState, coin, exitSide, this.getTradeSize(coin, 'tiny'));
                     delete this.parameters[`scalp_${coinId}`];
@@ -1595,7 +1466,6 @@ class Bot {
             }
         }
     }
-    
     async daytraderDannyTrade(marketState) {
         const coin = marketState.getCoin(this.targetCoin);
         if (!coin)
@@ -1610,7 +1480,7 @@ class Bot {
     }
     async swingtraderSamTrade(marketState) {
         if (Math.random() > 0.05)
-            return; 
+            return;
         const coin = marketState.getCoin(this.targetCoin);
         if (!coin)
             return;
@@ -1620,7 +1490,7 @@ class Bot {
         }
     }
     async newsNancyTrade(marketState) {
-        if (Math.random() < 0.002) { 
+        if (Math.random() < 0.002) {
             const coin = marketState.getCoin(this.targetCoin);
             if (!coin)
                 return;
@@ -1678,7 +1548,7 @@ class Bot {
         const coin = marketState.getCoin(this.targetCoin);
         if (!coin)
             return;
-        if (coin.baseVol > 0.05) { 
+        if (coin.baseVol > 0.05) {
             const side = Math.random() < 0.5 ? 'buy' : 'sell';
             await this.makeTrade(marketState, coin, side, this.getTradeSize(coin, 'aggressive'));
         }
@@ -1721,7 +1591,6 @@ class Bot {
         const coin = marketState.getCoin(this.targetCoin);
         if (!coin)
             return;
-        
         if (!this.parameters.mmLastSide || this.parameters.mmLastSide === 'sell') {
             await this.makeTrade(marketState, coin, 'buy', this.getTradeSize(coin, 'tiny'));
             this.parameters.mmLastSide = 'buy';
@@ -1736,7 +1605,7 @@ class Bot {
         if (!coin)
             return;
         const pctChange = this.getPriceChangePercent(coin, 5);
-        if (Math.abs(pctChange) > 8) { 
+        if (Math.abs(pctChange) > 8) {
             const side = pctChange > 0 ? 'buy' : 'sell';
             await this.makeTrade(marketState, coin, side, this.getTradeSize(coin, 'whale'));
         }
@@ -1756,7 +1625,7 @@ class Bot {
     }
     async patientPaulTrade(marketState) {
         if (Math.random() > 0.001)
-            return; 
+            return;
         const coin = marketState.getCoin(this.targetCoin);
         if (!coin)
             return;
@@ -1810,29 +1679,25 @@ class Bot {
         if (!coin)
             return;
         const pctChange = this.getPriceChangePercent(coin, 5);
-        if (Math.abs(pctChange) > 2) { 
+        if (Math.abs(pctChange) > 2) {
             const side = pctChange > 0 ? 'buy' : 'sell';
             await this.makeTrade(marketState, coin, side, this.getTradeSize(coin, 'moderate'));
         }
     }
     async save() {
-        
         const marketEngine = MarketEngine.getInstance();
         if (marketEngine) {
             marketEngine.queueBotSave(this.id);
         }
         else {
-            
             await this.forceSave();
         }
     }
     async forceSave() {
-        
         const validatedPortfolio = {
             cash: Number.isFinite(this.portfolio.cash) && this.portfolio.cash >= 0 && this.portfolio.cash < 1e12 ? this.portfolio.cash : 0,
             holdings: {}
         };
-        
         for (const [coinId, holding] of Object.entries(this.portfolio.holdings)) {
             if (holding && Number.isFinite(holding.amount) && holding.amount > 0 && holding.amount < 1e12 &&
                 Number.isFinite(holding.averageCost) && holding.averageCost > 0) {
@@ -1842,7 +1707,6 @@ class Bot {
                 };
             }
         }
-        
         this.portfolio = validatedPortfolio;
         await botsDB.set(this.id, {
             id: this.id,
@@ -1871,7 +1735,6 @@ class Bot {
         return bots;
     }
     getCurrentStrategy() {
-        
         switch (this.personality) {
             case 'momentum-maxine': return 'Momentum Trading - Following price trends';
             case 'mean-revertor-marvin': return 'Mean Reversion - Betting on price corrections';
@@ -1891,10 +1754,7 @@ class Bot {
         }
     }
     getRecentActions(limit = 10) {
-        
-        
         const actions = [];
-        
         for (const [coinId, holding] of Object.entries(this.portfolio.holdings)) {
             if (holding.amount > 0) {
                 actions.push({
@@ -1904,7 +1764,6 @@ class Bot {
                 });
             }
         }
-        
         actions.push({
             action: 'FOCUS',
             timestamp: this.lastAction,
@@ -1916,7 +1775,6 @@ class Bot {
         return this.parameters.marketHistory || {};
     }
 }
-
 class GlobalTradeTracker {
     recentTrades = [];
     maxTrades = 100;
@@ -1947,22 +1805,17 @@ class MarketAnalyticsEngine {
         let totalMarketCap = 0;
         let totalVolume = 0;
         let totalVolatility = 0;
-        
         for (const [coinId, coin] of coins) {
             const history = priceHistory.priceData.get(coinId) || [];
-            
             let change24h = 0;
-            if (history.length > 100) { 
+            if (history.length > 100) {
                 const oldPrice = history[history.length - 100].price;
                 change24h = ((coin.price - oldPrice) / oldPrice) * 100;
             }
-            
-            const recentHistory = history.slice(-100); 
+            const recentHistory = history.slice(-100);
             const volume24h = recentHistory.reduce((sum, point) => sum + point.volume, 0);
-            
-            const estimatedSupply = coin.liquidity * 1000; 
+            const estimatedSupply = coin.liquidity * 1000;
             const marketCap = coin.price * estimatedSupply;
-            
             let volatility = 0;
             if (recentHistory.length > 10) {
                 const returns = [];
@@ -1972,9 +1825,8 @@ class MarketAnalyticsEngine {
                 }
                 const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
                 const variance = returns.reduce((sum, ret) => sum + Math.pow(ret - mean, 2), 0) / returns.length;
-                volatility = Math.sqrt(variance) * Math.sqrt(252); 
+                volatility = Math.sqrt(variance) * Math.sqrt(252);
             }
-            
             const recentTrades = trades.filter(t => t.coinId === coinId &&
                 (Date.now() - t.timestamp.getTime()) < 24 * 60 * 60 * 1000).length;
             coinAnalytics.push({
@@ -1990,7 +1842,6 @@ class MarketAnalyticsEngine {
             totalVolume += volume24h;
             totalVolatility += volatility;
         }
-        
         const avgChange = coinAnalytics.reduce((sum, c) => sum + c.change24h, 0) / coinAnalytics.length;
         let sentiment = 'neutral';
         if (avgChange > 10)
@@ -2001,7 +1852,6 @@ class MarketAnalyticsEngine {
             sentiment = 'extreme_fear';
         else if (avgChange < -3)
             sentiment = 'fear';
-        
         const sorted = [...coinAnalytics].sort((a, b) => b.change24h - a.change24h);
         const topGainers = sorted.slice(0, 5).map(c => ({
             coinId: c.coinId,
@@ -2013,7 +1863,6 @@ class MarketAnalyticsEngine {
             change24h: c.change24h,
             price: c.price
         }));
-        
         const mostActive = [...coinAnalytics]
             .sort((a, b) => b.volume24h - a.volume24h)
             .slice(0, 5)
@@ -2022,9 +1871,7 @@ class MarketAnalyticsEngine {
             volume24h: c.volume24h,
             trades: c.trades
         }));
-        
         const volatilityIndex = totalVolatility / coinAnalytics.length;
-        
         const correlationMatrix = {};
         for (const coin1 of coinAnalytics) {
             correlationMatrix[coin1.coinId] = {};
@@ -2033,8 +1880,7 @@ class MarketAnalyticsEngine {
                     correlationMatrix[coin1.coinId][coin2.coinId] = 1.0;
                 }
                 else {
-                    
-                    const correlation = 0.3 + (Math.random() - 0.5) * 0.6; 
+                    const correlation = 0.3 + (Math.random() - 0.5) * 0.6;
                     correlationMatrix[coin1.coinId][coin2.coinId] = correlation;
                 }
             }
@@ -2059,9 +1905,8 @@ class MarketEventsSystem {
     activeEvents = new Map();
     eventIdCounter = 0;
     generateRandomEvent(coins) {
-        
         if (Math.random() > 0.0008)
-            return null; 
+            return null;
         const eventTypes = [
             'flash_crash', 'pump', 'rug_pull', 'whale_dump', 'news_spike', 'correlation_break', 'liquidity_crisis'
         ];
@@ -2072,7 +1917,7 @@ class MarketEventsSystem {
         const targetCoin = coinIds[Math.floor(Math.random() * coinIds.length)];
         let priceMultiplier = 1.0;
         let volatilityMultiplier = 1.0;
-        let duration = 30; 
+        let duration = 30;
         let message = '';
         switch (eventType) {
             case 'flash_crash':
@@ -2088,9 +1933,9 @@ class MarketEventsSystem {
                 message = `🚀 MASSIVE PUMP: ${coins.get(targetCoin)?.name || targetCoin} rockets ${Math.round((priceMultiplier - 1) * 100)}% to the moon!`;
                 break;
             case 'rug_pull':
-                priceMultiplier = 0.1; 
+                priceMultiplier = 0.1;
                 volatilityMultiplier = 10.0;
-                duration = 300; 
+                duration = 300;
                 message = `🪤 RUG PULL ALERT: ${coins.get(targetCoin)?.name || targetCoin} developers have vanished! -90% and falling!`;
                 break;
             case 'whale_dump':
@@ -2109,7 +1954,6 @@ class MarketEventsSystem {
                 message = `📰 BREAKING NEWS: ${isPositive ? 'Bullish' : 'Bearish'} news hits ${coins.get(targetCoin)?.name || targetCoin}! ${isPositive ? '+' : ''}${Math.round((priceMultiplier - 1) * 100)}%`;
                 break;
             case 'correlation_break':
-                
                 priceMultiplier = Math.random() < 0.5 ? 1.3 : 0.8;
                 volatilityMultiplier = 2.0;
                 duration = 180;
@@ -2118,7 +1962,7 @@ class MarketEventsSystem {
             case 'liquidity_crisis':
                 priceMultiplier = 0.6;
                 volatilityMultiplier = 4.0;
-                duration = 240; 
+                duration = 240;
                 message = `💸 LIQUIDITY CRISIS: ${coins.get(targetCoin)?.name || targetCoin} liquidity evaporates, spreads widen!`;
                 break;
         }
@@ -2135,7 +1979,6 @@ class MarketEventsSystem {
             active: true
         };
         this.activeEvents.set(event.id, event);
-        
         console.log(`🎪 MARKET EVENT: ${event.message}`);
         broadcastToAllRooms(JSON.stringify({
             type: 'market_event',
@@ -2159,7 +2002,6 @@ class MarketEventsSystem {
                 expiredEvents.push(eventId);
                 continue;
             }
-            
             if (event.targetCoin) {
                 const coin = coins.get(event.targetCoin);
                 if (coin) {
@@ -2167,13 +2009,11 @@ class MarketEventsSystem {
                 }
             }
             else if (event.type === 'correlation_break') {
-                
                 for (const coin of coins.values()) {
                     this.applyEventToCoin(coin, event, timeElapsed, priceHistoryManager, 0.3);
                 }
             }
         }
-        
         for (const eventId of expiredEvents) {
             const event = this.activeEvents.get(eventId);
             if (event) {
@@ -2187,19 +2027,15 @@ class MarketEventsSystem {
         }
     }
     applyEventToCoin(coin, event, timeElapsed, priceHistoryManager, intensityMultiplier = 1.0) {
-        
         const timeProgress = timeElapsed / event.duration;
         const intensity = Math.max(0.1, 1.0 - timeProgress) * intensityMultiplier;
-        
-        if (timeElapsed < 2) { 
+        if (timeElapsed < 2) {
             const adjustedMultiplier = 1 + ((event.priceMultiplier - 1) * intensity);
             coin.price *= adjustedMultiplier;
-            
             if (!Number.isFinite(coin.price) || coin.price <= 0 || coin.price > 1e12) {
                 coin.price = Math.max(0.001, Math.min(1e6, coin.price || 1.0));
             }
         }
-        
         const extraVol = (event.volatilityMultiplier - 1) * intensity * 0.1;
         const volatilityJump = (Math.random() - 0.5) * extraVol;
         const newPrice = coin.price * (1 + volatilityJump);
@@ -2222,35 +2058,31 @@ export class MarketEngine {
     priceHistoryManager;
     marketEvents;
     analytics;
-    botSaveQueue = new Set(); 
-    coinSaveQueue = new Set(); 
+    botSaveQueue = new Set();
+    coinSaveQueue = new Set();
     constructor() {
         this.priceHistoryManager = new PriceHistoryManager();
         this.marketEvents = new MarketEventsSystem();
         this.analytics = new MarketAnalyticsEngine();
         MarketEngine.instance = this;
-        
         this.startBatchSaveTimer();
     }
     static getInstance() {
         return MarketEngine.instance;
     }
     startBatchSaveTimer() {
-        
         setInterval(async () => {
             try {
-                
                 if (this.botSaveQueue.size > 0) {
                     const botsToSave = Array.from(this.botSaveQueue);
                     this.botSaveQueue.clear();
                     for (const botId of botsToSave) {
                         const bot = this.bots.get(botId);
                         if (bot) {
-                            await bot.forceSave(); 
+                            await bot.forceSave();
                         }
                     }
                 }
-                
                 if (this.coinSaveQueue.size > 0) {
                     const coinsToSave = Array.from(this.coinSaveQueue);
                     this.coinSaveQueue.clear();
@@ -2265,7 +2097,7 @@ export class MarketEngine {
             catch (error) {
                 console.error('Batch save error:', error);
             }
-        }, 5000); 
+        }, 5000);
     }
     queueBotSave(botId) {
         this.botSaveQueue.add(botId);
@@ -2277,62 +2109,48 @@ export class MarketEngine {
         return Array.from(this.bots.values());
     }
     async init() {
-        
         const coins = await Coin.loadAll();
         const bots = await Bot.loadAll();
         coins.forEach(coin => this.coins.set(coin.id, coin));
         bots.forEach(bot => this.bots.set(bot.id, bot));
-        
         if (coins.length === 0) {
             await this.initializeDefaultCoins();
         }
-        
         if (bots.length === 0) {
             await this.initializeDefaultBots();
         }
-        
         await this.initializePriceHistory();
-        
         if (coins.length === 0 && bots.length === 0) {
             console.log('🚀 Starting fast forward simulation (2 hours of market activity)...');
             await this.runFastForwardSimulation();
             console.log('✅ Fast forward simulation complete!');
         }
-        
         this.startMarketTick();
     }
     async initializeDefaultCoins() {
         const defaultCoins = [
-            
             { id: 'RCOIN', name: 'RealCoin', price: 1.0, baseVol: 0.015, liquidity: 5000 },
             { id: 'WHALE', name: 'WhaleCoin', price: 50.0, baseVol: 0.008, liquidity: 500 },
             { id: 'STABLE', name: 'StableMatic', price: 1.001, baseVol: 0.005, liquidity: 10000 },
-            
             { id: 'TOAST', name: 'ToastCoin', price: 0.25, baseVol: 0.025, liquidity: 2000 },
             { id: 'DOGE2', name: 'DogeButBetter', price: 0.08, baseVol: 0.03, liquidity: 3000 },
             { id: 'PIZZA', name: 'PizzaCoin', price: 3.14, baseVol: 0.022, liquidity: 1800 },
             { id: 'COFFEE', name: 'CoffeeBeans', price: 4.20, baseVol: 0.018, liquidity: 1500 },
             { id: 'GAME', name: 'GameToken', price: 12.34, baseVol: 0.028, liquidity: 1200 },
-            
             { id: 'MEME', name: 'MemeCoin', price: 0.01, baseVol: 0.04, liquidity: 1000 },
             { id: 'MOON', name: 'MoonShot', price: 0.15, baseVol: 0.06, liquidity: 800 },
             { id: 'YOLO', name: 'YoloSwag', price: 0.69, baseVol: 0.08, liquidity: 600 },
             { id: 'PUMP', name: 'PumpCoin', price: 0.001, baseVol: 0.12, liquidity: 400 },
             { id: 'SHIB2', name: 'ShibKiller', price: 0.0001, baseVol: 0.15, liquidity: 2500 },
-            
             { id: 'CHAOS', name: 'ChaosCoin', price: 0.00001, baseVol: 0.25, liquidity: 200 },
             { id: 'RUGME', name: 'RugPullCoin', price: 0.0042, baseVol: 0.18, liquidity: 300 },
             { id: 'SCAM', name: 'TotallyLegit', price: 0.13, baseVol: 0.22, liquidity: 150 },
-            
             { id: 'GOLD', name: 'DigitalGold', price: 1337.0, baseVol: 0.012, liquidity: 100 },
             { id: 'DIAMOND', name: 'DiamondHands', price: 420.69, baseVol: 0.016, liquidity: 250 },
-            
             { id: 'UTIL', name: 'UtilityCoin', price: 2.5, baseVol: 0.02, liquidity: 1600 },
             { id: 'WORK', name: 'WorkToken', price: 8.0, baseVol: 0.024, liquidity: 1100 },
-            
             { id: 'ROBOT', name: 'RobotCoin', price: 25.0, baseVol: 0.035, liquidity: 900 },
             { id: 'BRAIN', name: 'BrainChain', price: 7.77, baseVol: 0.045, liquidity: 700 },
-            
             { id: 'TACO', name: 'TacoCoin', price: 1.99, baseVol: 0.032, liquidity: 1300 },
             { id: 'BURGER', name: 'BurgerToken', price: 5.99, baseVol: 0.027, liquidity: 1000 }
         ];
@@ -2347,25 +2165,19 @@ export class MarketEngine {
     }
     async initializeDefaultBots() {
         const coinIds = Array.from(this.coins.keys());
-        
         const personalities = Object.keys(PERSONALITY_TRAITS);
         const defaultBots = [];
-        
         for (let i = 1; i <= 150; i++) {
             const personality = personalities[Math.floor(Math.random() * personalities.length)];
             const targetCoin = coinIds[Math.floor(Math.random() * coinIds.length)] || 'RCOIN';
-            
             let watchedCoins;
             if (personality === 'quant-quinn' || personality === 'arbitrage-arnie' || personality === 'influencer-izzy') {
-                
                 watchedCoins = [...coinIds];
             }
             else if (personality === 'copycat-carla' || personality === 'doom-daniel') {
-                
                 watchedCoins = coinIds.slice(0, Math.max(2, Math.floor(coinIds.length * 0.8)));
             }
             else {
-                
                 const numCoins = Math.max(2, Math.min(4, Math.floor(Math.random() * coinIds.length) + 1));
                 watchedCoins = [targetCoin];
                 while (watchedCoins.length < numCoins) {
@@ -2375,7 +2187,6 @@ export class MarketEngine {
                     }
                 }
             }
-            
             let cash = 1000;
             if (personality === 'whale-wendy')
                 cash = 50000 + Math.random() * 50000;
@@ -2399,7 +2210,7 @@ export class MarketEngine {
         for (const botData of defaultBots) {
             const bot = new Bot({
                 ...botData,
-                lastAction: new Date(Date.now() - Math.random() * 30000), 
+                lastAction: new Date(Date.now() - Math.random() * 30000),
                 enabled: true
             });
             await bot.save();
@@ -2407,22 +2218,17 @@ export class MarketEngine {
         }
     }
     async initializePriceHistory() {
-        
         for (const coin of this.coins.values()) {
-            
             const priceData = this.priceHistoryManager.priceData.get(coin.id);
             const needsData = !priceData || priceData.length === 0 ||
                 (new Date().getTime() - priceData[priceData.length - 1].timestamp.getTime()) > 60000;
             if (needsData) {
-                
                 const now = new Date();
                 const basePrice = coin.price;
-                
-                const totalSeconds = 2 * 60 * 60; 
+                const totalSeconds = 2 * 60 * 60;
                 for (let i = totalSeconds; i >= 0; i--) {
-                    const timestamp = new Date(now.getTime() - (i * 1000)); 
-                    
-                    const variation = (Math.random() - 0.5) * 0.001; 
+                    const timestamp = new Date(now.getTime() - (i * 1000));
+                    const variation = (Math.random() - 0.5) * 0.001;
                     const price = Math.max(0.001, basePrice * (1 + variation));
                     await this.priceHistoryManager.recordPrice(coin.id, price, Math.random() * 0.1);
                 }
@@ -2435,26 +2241,19 @@ export class MarketEngine {
         setInterval(async () => {
             try {
                 tickCount++;
-                
                 this.marketEvents.generateRandomEvent(this.coins);
-                
                 this.marketEvents.applyEventEffects(this.coins, this.priceHistoryManager);
-                
                 for (const coin of this.coins.values()) {
                     coin.addVolatility(this.priceHistoryManager);
-                    
                     if (!Number.isFinite(coin.price) || coin.price <= 0 || coin.price > 1e12) {
                         console.warn(`Invalid price for ${coin.id}: ${coin.price}, resetting to 1.0`);
                         coin.price = 1.0;
                     }
-                    
                     this.queueCoinSave(coin.id);
                 }
-                
                 for (const bot of this.bots.values()) {
                     await bot.tick(this);
                 }
-                
                 if (tickCount % 10 === 0) {
                     const recentTrades = globalTradeTracker.getRecentTrades(1000);
                     const analytics = this.analytics.calculateAnalytics(this.coins, this.priceHistoryManager, recentTrades);
@@ -2463,12 +2262,10 @@ export class MarketEngine {
                         analytics: analytics
                     }));
                 }
-                
-                if (tickCount % 2 === 0) { 
+                if (tickCount % 2 === 0) {
                     const priceUpdate = {
                         type: 'price_update',
                         prices: Object.fromEntries(Array.from(this.coins.values()).map(coin => {
-                            
                             const price = Number.isFinite(coin.price) && coin.price > 0 ? coin.price : 1.0;
                             return [coin.id, {
                                     price: price,
@@ -2490,43 +2287,35 @@ export class MarketEngine {
             catch (error) {
                 console.error('Market tick error:', error);
             }
-        }, 1000); 
+        }, 1000);
     }
     async runFastForwardSimulation() {
-        const SIMULATION_DURATION = 2 * 60 * 60; 
-        const TICKS_PER_SECOND = 100; 
+        const SIMULATION_DURATION = 2 * 60 * 60;
+        const TICKS_PER_SECOND = 100;
         const TOTAL_TICKS = SIMULATION_DURATION * TICKS_PER_SECOND;
-        const PROGRESS_INTERVAL = Math.floor(TOTAL_TICKS / 20); 
+        const PROGRESS_INTERVAL = Math.floor(TOTAL_TICKS / 20);
         console.log(`Running ${SIMULATION_DURATION / 3600}h simulation at ${TICKS_PER_SECOND}x speed (${TOTAL_TICKS} ticks)...`);
         let tickCount = 0;
         const startTime = Date.now();
         for (let tick = 0; tick < TOTAL_TICKS; tick++) {
             try {
                 tickCount++;
-                
-                if (Math.random() < 0.02) { 
+                if (Math.random() < 0.02) {
                     this.marketEvents.generateRandomEvent(this.coins);
                 }
-                
                 this.marketEvents.applyEventEffects(this.coins, this.priceHistoryManager);
-                
                 for (const coin of this.coins.values()) {
                     coin.addVolatility(this.priceHistoryManager);
-                    
                     if (!Number.isFinite(coin.price) || coin.price <= 0 || coin.price > 1e12) {
                         coin.price = Math.max(0.001, Math.random() * 10);
                     }
                 }
-                
                 for (const bot of this.bots.values()) {
-                    
                     const originalFreq = bot.traits.frequency;
-                    bot.traits.frequency = Math.max(originalFreq, 2); 
+                    bot.traits.frequency = Math.max(originalFreq, 2);
                     await bot.tick(this);
-                    
                     bot.traits.frequency = originalFreq;
                 }
-                
                 if (tick % PROGRESS_INTERVAL === 0) {
                     const progress = Math.floor((tick / TOTAL_TICKS) * 100);
                     const elapsedReal = (Date.now() - startTime) / 1000;
@@ -2538,7 +2327,6 @@ export class MarketEngine {
                 console.error('Fast forward tick error:', error);
             }
         }
-        
         console.log('Saving simulation data...');
         for (const coin of this.coins.values()) {
             await coin.save();
@@ -2556,9 +2344,7 @@ export class MarketEngine {
             return null;
         const order = { ...orderData };
         if (order.type === 'market') {
-            
             const executionPrice = coin.applyPriceImpact(order.amount, order.side, this.priceHistoryManager);
-            
             const trade = {
                 id: `trade-${this.tradeIdCounter++}`,
                 coinId: order.coinId,
@@ -2568,23 +2354,16 @@ export class MarketEngine {
                 sellerId: order.side === 'sell' ? order.userId : 'market',
                 timestamp: new Date()
             };
-            
             globalTradeTracker.addTrade(trade);
-            
             if (!order.userId.startsWith('bot-')) {
-                
                 await tradesDB.set(trade.id, trade);
-                
                 order.status = 'filled';
                 await ordersDB.set(order.id, order);
-                
                 await this.updatePortfolio(order.userId, order.coinId, order.side, order.amount, executionPrice);
             }
             else {
-                
                 await this.updatePortfolio(order.userId, order.coinId, order.side, order.amount, executionPrice);
             }
-            
             const tradeMessage = {
                 type: 'trade',
                 trade: trade
@@ -2593,7 +2372,6 @@ export class MarketEngine {
             return order;
         }
         else {
-            
             if (!order.userId.startsWith('bot-')) {
                 await ordersDB.set(order.id, order);
             }
@@ -2611,7 +2389,6 @@ export class MarketEngine {
                 portfolio.cash -= cost;
                 const currentHolding = portfolio.holdings[coinId];
                 if (currentHolding) {
-                    
                     const totalValue = (currentHolding.amount * currentHolding.averageCost) + cost;
                     const totalAmount = currentHolding.amount + amount;
                     portfolio.holdings[coinId] = {
@@ -2620,7 +2397,6 @@ export class MarketEngine {
                     };
                 }
                 else {
-                    
                     portfolio.holdings[coinId] = {
                         amount: amount,
                         averageCost: price
@@ -2634,11 +2410,9 @@ export class MarketEngine {
                 portfolio.cash += cost;
                 const remainingAmount = currentHolding.amount - amount;
                 if (remainingAmount <= 0.000001) {
-                    
                     delete portfolio.holdings[coinId];
                 }
                 else {
-                    
                     portfolio.holdings[coinId] = {
                         amount: remainingAmount,
                         averageCost: currentHolding.averageCost
@@ -2648,7 +2422,6 @@ export class MarketEngine {
         }
         await portfoliosDB.set(userId, portfolio);
     }
-    
     getPortfolioWithGains(portfolio, coins) {
         const result = {
             cash: portfolio.cash,
@@ -2695,7 +2468,6 @@ export class MarketEngine {
         return Array.from(this.coins.values());
     }
 }
-
 const marketEngine = new MarketEngine();
 function generateId() {
     return crypto.randomBytes(16).toString('hex');
@@ -2705,25 +2477,21 @@ wss.on('connection', (ws) => {
     ws.on('message', (msg) => {
         try {
             const data = JSON.parse(msg.toString());
-            
             if (data.room && typeof data.room === 'string') {
                 addClientToRoom(ws, data.room);
                 console.log(`Client joined room: ${data.room}`);
-                
                 ws.send(JSON.stringify({
                     type: 'room_joined',
                     room: data.room
                 }));
                 return;
             }
-            
             const currentRoom = clientRooms.get(ws);
             if (currentRoom) {
                 broadcastToRoom(currentRoom, msg.toString(), ws);
             }
         }
         catch (error) {
-            
             const currentRoom = clientRooms.get(ws);
             if (currentRoom) {
                 broadcastToRoom(currentRoom, msg.toString(), ws);
@@ -2829,7 +2597,6 @@ async function handleInternalHTTP(req, res) {
                         passwordHash: hash(password)
                     };
                     await accountDB.set(username, acc);
-                    
                     const initialPortfolio = {
                         cash: 10000,
                         holdings: {}
@@ -3162,7 +2929,6 @@ async function handleInternalHTTP(req, res) {
                         }
                         const pending = tokenData.pendingTOTP;
                         if (new Date(pending.expiresAt) < new Date()) {
-                            
                             delete tokenData.pendingTOTP;
                             await tokenDB.set(token, tokenData);
                             res.writeHead(410, { 'Content-Type': 'application/json' });
@@ -3176,7 +2942,6 @@ async function handleInternalHTTP(req, res) {
                             return;
                         }
                         if (acc.totp) {
-                            
                             delete tokenData.pendingTOTP;
                             await tokenDB.set(token, tokenData);
                             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -3185,16 +2950,13 @@ async function handleInternalHTTP(req, res) {
                         }
                         let usedBackupCode = null;
                         let verified = false;
-                        
                         verified = speakeasy.totp.verify({
                             secret: pending.secretBase32,
                             encoding: 'base32',
                             token: code,
-                            window: 1 
+                            window: 1
                         });
-                        
                         if (!verified) {
-                            
                             const matching = pending.backupCodes.find((c) => c === code);
                             if (matching) {
                                 verified = true;
@@ -3356,7 +3118,6 @@ async function handleInternalHTTP(req, res) {
                             return;
                         }
                         const { token, newUsername, password } = parsed.data;
-                        
                         const tokenData = await tokenDB.get(token);
                         if (!tokenData || tokenData.expiresAt < new Date()) {
                             res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -3364,7 +3125,6 @@ async function handleInternalHTTP(req, res) {
                             await tokenDB.delete(token);
                             return;
                         }
-                        
                         const currentUsername = tokenData.userId;
                         const currentAccount = await accountDB.get(currentUsername);
                         if (!currentAccount) {
@@ -3372,31 +3132,25 @@ async function handleInternalHTTP(req, res) {
                             res.end(JSON.stringify({ error: 'Invalid token' }));
                             return;
                         }
-                        
                         if (currentAccount.passwordHash !== hash(password)) {
                             res.writeHead(401, { 'Content-Type': 'application/json' });
                             res.end(JSON.stringify({ error: 'Invalid password' }));
                             return;
                         }
-                        
                         const existingAccount = await accountDB.get(newUsername);
                         if (existingAccount) {
                             res.writeHead(409, { 'Content-Type': 'application/json' });
                             res.end(JSON.stringify({ error: 'Username already taken' }));
                             return;
                         }
-                        
                         await accountDB.set(newUsername, currentAccount);
-                        
                         const portfolioData = await portfoliosDB.get(currentUsername);
                         if (portfolioData) {
                             await portfoliosDB.set(newUsername, portfolioData);
                             await portfoliosDB.delete(currentUsername);
                         }
-                        
                         tokenData.userId = newUsername;
                         await tokenDB.set(token, tokenData);
-                        
                         await accountDB.delete(currentUsername);
                         res.writeHead(200, { 'Content-Type': 'application/json' });
                         res.end(JSON.stringify({
@@ -3438,19 +3192,16 @@ async function handleInternalHTTP(req, res) {
                         const { userId } = parsed.data;
                         const portfolioData = await portfoliosDB.get(userId);
                         if (!portfolioData) {
-                            
                             const emptyPortfolio = {
                                 cash: 10000,
                                 holdings: {}
                             };
                             await portfoliosDB.set(userId, emptyPortfolio);
-                            
                             const portfolioWithGains = marketEngine.getPortfolioWithGains(emptyPortfolio, marketEngine.coins);
                             res.writeHead(200, { 'Content-Type': 'application/json' });
                             res.end(JSON.stringify({ success: true, portfolio: portfolioWithGains }));
                             return;
                         }
-                        
                         const portfolioWithGains = marketEngine.getPortfolioWithGains(portfolioData, marketEngine.coins);
                         res.writeHead(200, { 'Content-Type': 'application/json' });
                         res.end(JSON.stringify({ success: true, portfolio: portfolioWithGains }));
@@ -3470,7 +3221,6 @@ async function handleInternalHTTP(req, res) {
     }
 }
 async function handleTradingAPI(req, res) {
-    
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -3487,7 +3237,6 @@ async function handleTradingAPI(req, res) {
         return;
     }
     const userId = tokenData.userId;
-    
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathname = url.pathname;
     switch (pathname) {
@@ -3511,7 +3260,6 @@ async function handleTradingAPI(req, res) {
                     portfolio = { cash: 10000, holdings: {} };
                     await portfoliosDB.set(userId, portfolio);
                 }
-                
                 const portfolioWithGains = marketEngine.getPortfolioWithGains(portfolio, marketEngine.coins);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, portfolio: portfolioWithGains }));
@@ -3539,14 +3287,12 @@ async function handleTradingAPI(req, res) {
                         return;
                     }
                     const { coinId, side, type, amount, price } = parsed.data;
-                    
                     const coin = marketEngine.getCoin(coinId);
                     if (!coin) {
                         res.writeHead(400, { 'Content-Type': 'application/json' });
                         res.end(JSON.stringify({ error: 'Invalid coin ID' }));
                         return;
                     }
-                    
                     let portfolio = await portfoliosDB.get(userId);
                     if (!portfolio) {
                         portfolio = { cash: 10000, holdings: {} };
@@ -3568,7 +3314,6 @@ async function handleTradingAPI(req, res) {
                             return;
                         }
                     }
-                    
                     const order = {
                         id: generateId(),
                         userId,
@@ -3598,7 +3343,6 @@ async function handleTradingAPI(req, res) {
             break;
         case '/api/trading/trades':
             if (req.method === 'GET') {
-                
                 const recentTrades = globalTradeTracker.getRecentTrades(50);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, trades: recentTrades }));
@@ -3646,7 +3390,6 @@ async function handleTradingAPI(req, res) {
             if (req.method === 'GET') {
                 try {
                     const bots = marketEngine.getAllBots();
-                    
                     const botDetails = bots.map(bot => ({
                         id: bot.id,
                         personality: bot.personality,
@@ -3713,25 +3456,20 @@ async function handleTradingAPI(req, res) {
                     const url = new URL(req.url, `http://${req.headers.host}`);
                     const timeframe = url.searchParams.get('timeframe') || 'all';
                     const limit = parseInt(url.searchParams.get('limit') || '50');
-                    
                     const allUserIds = await portfoliosDB.allKeys();
                     const leaderboardData = [];
                     for (const userId of allUserIds) {
                         const portfolio = await portfoliosDB.get(userId);
                         if (!portfolio)
                             continue;
-                        
                         const account = await accountDB.get(userId);
-                        
                         const portfolioWithGains = marketEngine.getPortfolioWithGains(portfolio, marketEngine.coins);
-                        
                         let totalValue = portfolioWithGains.cash;
                         for (const [coinId, holding] of Object.entries(portfolioWithGains.holdings)) {
                             totalValue += holding.totalValue;
                         }
-                        
                         let totalGains = 0;
-                        let totalInvested = portfolioWithGains.cash; 
+                        let totalInvested = portfolioWithGains.cash;
                         for (const [coinId, holding] of Object.entries(portfolioWithGains.holdings)) {
                             const invested = holding.amount * holding.averageCost;
                             totalInvested += invested;
@@ -3748,9 +3486,7 @@ async function handleTradingAPI(req, res) {
                             holdings: Object.keys(portfolioWithGains.holdings).length
                         });
                     }
-                    
                     leaderboardData.sort((a, b) => b.totalValue - a.totalValue);
-                    
                     const limitedData = leaderboardData.slice(0, limit);
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({
@@ -3768,27 +3504,22 @@ async function handleTradingAPI(req, res) {
             }
             break;
         default:
-            
             if (req.url?.startsWith('/api/trading/user/') && req.method === 'GET') {
                 try {
                     const username = decodeURIComponent(req.url.split('/api/trading/user/')[1]);
-                    
                     const account = await accountDB.get(username);
                     if (!account) {
                         res.writeHead(404, { 'Content-Type': 'application/json' });
                         res.end(JSON.stringify({ success: false, error: 'User not found' }));
                         return;
                     }
-                    
                     const portfolio = await portfoliosDB.get(username);
                     if (!portfolio) {
                         res.writeHead(404, { 'Content-Type': 'application/json' });
                         res.end(JSON.stringify({ success: false, error: 'Portfolio not found' }));
                         return;
                     }
-                    
                     const portfolioWithGains = marketEngine.getPortfolioWithGains(portfolio, marketEngine.coins);
-                    
                     let totalValue = portfolioWithGains.cash;
                     let totalGains = 0;
                     let totalInvested = portfolioWithGains.cash;
@@ -3799,7 +3530,6 @@ async function handleTradingAPI(req, res) {
                         totalGains += holding.totalValue - invested;
                     }
                     const gainPercentage = totalInvested > 0 ? (totalGains / totalInvested) * 100 : 0;
-                    
                     const allTradeKeys = await tradesDB.allKeys();
                     const allTrades = [];
                     for (const key of allTradeKeys) {
@@ -3882,7 +3612,6 @@ server.on('upgrade', (req, socket, head) => {
 });
 server.listen(8080, async () => {
     console.log(`RealCoin server listening http://localhost:8080`);
-    
     console.log('Initializing market engine...');
     await marketEngine.init();
     console.log('Market engine initialized and running!');
@@ -3894,6 +3623,7 @@ proxy.on('error', (err, _, res) => {
 if (!useProxy) {
     //@ts-ignore
     const { handler: svelteKitHandler } = await import('../build/handler.js');
+    //@ts-ignore
     use(svelteKitHandler);
 }
 function parseCookies(req) {

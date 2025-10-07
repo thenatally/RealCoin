@@ -3,7 +3,6 @@ services:
     build: ./
     env_file:
       - ./.env
-    command: npm start
     restart: unless-stopped
     environment:
       - SURREAL_URI=ws://surrealdb:9000/rpc

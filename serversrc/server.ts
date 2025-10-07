@@ -2148,7 +2148,7 @@ class Bot {
 	public getRecentActions(limit: number = 10): Array<{action: string, timestamp: Date, details: string}> {
 		
 		
-		const actions = [];
+		const actions:any = [];
 		
 		
 		for (const [coinId, holding] of Object.entries(this.portfolio.holdings)) {
@@ -2256,7 +2256,7 @@ class MarketAnalyticsEngine {
 			
 			let volatility = 0;
 			if (recentHistory.length > 10) {
-				const returns = [];
+				const returns:any = [];
 				for (let i = 1; i < recentHistory.length; i++) {
 					const return_ = Math.log(recentHistory[i].price / recentHistory[i-1].price);
 					returns.push(return_);
@@ -4270,7 +4270,7 @@ async function handleTradingAPI(req: http.IncomingMessage, res: http.ServerRespo
 
 					
 					const allUserIds = await portfoliosDB.allKeys();
-					const leaderboardData = [];
+					const leaderboardData:any = [];
 
 					for (const userId of allUserIds) {
 						const portfolio = await portfoliosDB.get(userId);
@@ -4470,6 +4470,7 @@ proxy.on('error', (err, _, res) => {
 if (!useProxy) {
 	//@ts-ignore
 	const { handler: svelteKitHandler } = await import('../build/handler.js');
+	//@ts-ignore
 	use(svelteKitHandler);
 }
 function parseCookies(req: http.IncomingMessage): Record<string, string> {

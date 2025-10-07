@@ -212,7 +212,9 @@ async function tradingApiRequest<T = any>(
 		const authMatch = cookieStr.match(/auth_token_js=([^;]+)/);
 		const authToken = authMatch ? authMatch[1] : '';
 
-		const response = await fetch(`http://localhost:8080/api/trading${endpoint}`, {
+		const apiBase = `${window.location.protocol}//${window.location.hostname}${window.location.port ? `:${window.location.port}` : ''}`;
+
+		const response = await fetch(`${apiBase}/api/trading${endpoint}`, {
 			headers: {
 				'Content-Type': 'application/json',
 				'Authorization': authToken ? `Bearer ${authToken}` : '',
