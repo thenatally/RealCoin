@@ -1,0 +1,18 @@
+services:
+  app:
+    build: ./
+    env_file:
+      - ./.env
+    command: npm start
+    restart: unless-stopped
+    environment:
+      - SURREAL_URI=ws://surrealdb:9000/rpc
+      - NODE_ENV=production
+    networks:
+      - surrealdb-net
+      - dokploy-network
+networks:
+  surrealdb-net:
+    external: true
+  dokploy-network:
+    external: true
