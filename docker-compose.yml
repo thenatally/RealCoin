@@ -11,6 +11,13 @@ services:
     networks:
       - surrealdb-net
       - dokploy-network
+    labels:
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.realcoin-frontend-tj4rm8-6-web.rule=Host(`realcoin.tally.gay`)
+      - traefik.http.routers.realcoin-frontend-tj4rm8-6-web.entrypoints=web
+      - traefik.http.services.realcoin-frontend-tj4rm8-6-web.loadbalancer.server.port=8080
+      - traefik.http.routers.realcoin-frontend-tj4rm8-6-web.service=realcoin-frontend-tj4rm8-6-web
+      - traefik.enable=true
 networks:
   surrealdb-net:
     external: true
