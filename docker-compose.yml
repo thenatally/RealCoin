@@ -11,11 +11,11 @@ services:
       - surrealdb-net
       - dokploy-network
     labels:
-     - traefik.http.routers.realcoin-frontend-mzwgam-2-web.rule=Host(`realcoin.tally.gay`)
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.realcoin-frontend-mzwgam-2-web.rule=Host(`realcoin.tally.gay`)
       - traefik.http.routers.realcoin-frontend-mzwgam-2-web.entrypoints=web
       - traefik.http.services.realcoin-frontend-mzwgam-2-web.loadbalancer.server.port=8080
       - traefik.http.routers.realcoin-frontend-mzwgam-2-web.service=realcoin-frontend-mzwgam-2-web
-      - traefik.docker.network=dokploy-network
       - traefik.enable=true
 networks:
   surrealdb-net:

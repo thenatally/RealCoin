@@ -373,6 +373,9 @@ export const trading = {
 		return tradingApiRequest(`/user/${encodeURIComponent(username)}`);
 	},
 
+	/**
+	 * Get portfolio value history over time
+	 */
 	async getPortfolioHistory(
 		timeframe: '5min' | '10min' | '30min' | '1hour' | '4hour' | '8hour' | '1day' | '4day' | '1week' | '1month' = '1day', 
 		limit: number = 24
