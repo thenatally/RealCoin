@@ -4,7 +4,9 @@ export type CoinData = {
 	id: string;
 	name: string;
 	price: number;
-	lastUpdated: string; 
+	lastUpdated: string;
+	baseVol?: number;
+	liquidity?: number;
 };
 
 export type OrderData = {

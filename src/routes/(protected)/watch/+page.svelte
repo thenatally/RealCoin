@@ -260,7 +260,7 @@
 				</Button>
 			{/if}
 			
-			<Button href="/trading" size="sm">
+			<Button href="/market" size="sm">
 				<ArrowUpRight class="size-4 mr-2" />
 				Start Trading
 			</Button>
@@ -405,7 +405,7 @@
 							</div>
 							
 							<div class="pt-2 border-t">
-								<Button href="/trading" variant="outline" size="sm" class="w-full">
+								<Button href="/market" variant="outline" size="sm" class="w-full">
 									<Eye class="size-4 mr-2" />
 									Trade {coin.id.toUpperCase()}
 								</Button>

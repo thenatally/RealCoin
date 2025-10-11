@@ -189,6 +189,20 @@ const priceHistorySchema = z.object({
     volume: z.number()
 });
 const priceHistoryDB = new DBMap('priceHistory', priceHistorySchema, null);
+// Portfolio history schema for tracking portfolio values over time
+const portfolioHistorySchema = z.object({
+    userId: z.string(),
+    timestamp: z.date(),
+    totalValue: z.number(),
+    holdingsValue: z.number(),
+    cashValue: z.number(),
+    holdings: z.record(z.string(), z.object({
+        amount: z.number(),
+        value: z.number(),
+        avgCost: z.number()
+    }))
+});
+const portfolioHistoryDB = new DBMap('portfolioHistory', portfolioHistorySchema, null);
 class PriceHistoryManager {
     priceData = new Map();
     constructor() {
@@ -283,6 +297,39 @@ class PriceHistoryManager {
 }
 function generateToken() {
     return crypto.randomBytes(32).toString('hex');
+}
+// Save portfolio snapshot to history
+async function savePortfolioSnapshot(userId, portfolio) {
+    try {
+        const portfolioWithGains = marketEngine.getPortfolioWithGains(portfolio, marketEngine.coins);
+        // Calculate holdings value
+        const holdingsValue = Object.entries(portfolioWithGains.holdings).reduce((sum, [coinId, holding]) => {
+            return sum + holding.totalValue;
+        }, 0);
+        // Create portfolio history entry
+        const historyEntry = {
+            userId,
+            timestamp: new Date(),
+            totalValue: portfolioWithGains.totalValue,
+            holdingsValue,
+            cashValue: portfolioWithGains.cash,
+            holdings: Object.entries(portfolioWithGains.holdings).reduce((acc, [coinId, holding]) => {
+                acc[coinId] = {
+                    amount: holding.amount || 0,
+                    value: holding.totalValue || 0,
+                    avgCost: holding.averageCost || 0
+                };
+                return acc;
+            }, {})
+        };
+        // Generate unique ID for this history entry
+        const historyId = `${userId}-${Date.now()}`;
+        await portfolioHistoryDB.set(historyId, historyEntry);
+        console.log(`Saved portfolio snapshot for ${userId}: Total=${portfolioWithGains.totalValue}, Holdings=${holdingsValue}, Cash=${portfolioWithGains.cash}`);
+    }
+    catch (error) {
+        console.error(`Error saving portfolio snapshot for ${userId}:`, error);
+    }
 }
 class Coin {
     id;
@@ -2421,6 +2468,8 @@ export class MarketEngine {
             }
         }
         await portfoliosDB.set(userId, portfolio);
+        // Save portfolio snapshot after trade
+        await savePortfolioSnapshot(userId, portfolio);
     }
     getPortfolioWithGains(portfolio, coins) {
         const result = {
@@ -2469,6 +2518,125 @@ export class MarketEngine {
     }
 }
 const marketEngine = new MarketEngine();
+// Hierarchical data cleanup function with event preservation
+async function cleanupPortfolioHistory() {
+    try {
+        console.log('Cleaning up portfolio history...');
+        const allHistoryIds = await portfolioHistoryDB.allKeys();
+        const currentTime = new Date();
+        // Group by user
+        const userHistories = new Map();
+        for (const historyId of allHistoryIds) {
+            const userId = historyId.split('-')[0];
+            if (!userHistories.has(userId)) {
+                userHistories.set(userId, []);
+            }
+            userHistories.get(userId).push(historyId);
+        }
+        for (const [userId, historyIds] of userHistories) {
+            // Get all history entries for this user
+            const entries = [];
+            for (const historyId of historyIds) {
+                const entry = await portfolioHistoryDB.get(historyId);
+                if (entry) {
+                    entries.push({ id: historyId, entry });
+                }
+            }
+            // Sort by timestamp (oldest first for easier processing)
+            entries.sort((a, b) => a.entry.timestamp.getTime() - b.entry.timestamp.getTime());
+            const toDelete = [];
+            const now = currentTime.getTime();
+            const oneDayMs = 24 * 60 * 60 * 1000;
+            const oneMonthMs = 30 * oneDayMs;
+            // Phase 1: Keep all data from the past day
+            const pastDayEntries = entries.filter(e => (now - e.entry.timestamp.getTime()) <= oneDayMs);
+            // Phase 2: Process data older than 1 day but less than 1 month
+            const olderEntries = entries.filter(e => {
+                const age = now - e.entry.timestamp.getTime();
+                return age > oneDayMs && age <= oneMonthMs;
+            });
+            if (olderEntries.length > 0) {
+                // Calculate significant changes (extremes) to preserve
+                const significantEntries = new Set();
+                // Find local extremes (significant value changes)
+                for (let i = 1; i < olderEntries.length - 1; i++) {
+                    const prev = olderEntries[i - 1].entry;
+                    const curr = olderEntries[i].entry;
+                    const next = olderEntries[i + 1].entry;
+                    // Calculate percentage changes
+                    const prevChange = prev.totalValue > 0 ? Math.abs(curr.totalValue - prev.totalValue) / prev.totalValue : 0;
+                    const nextChange = next.totalValue > 0 ? Math.abs(next.totalValue - curr.totalValue) / curr.totalValue : 0;
+                    // Keep if it's a significant change (>5%) or local extreme
+                    if (prevChange > 0.05 || nextChange > 0.05) {
+                        significantEntries.add(olderEntries[i].id);
+                    }
+                    // Keep local maxima and minima
+                    if ((curr.totalValue > prev.totalValue && curr.totalValue > next.totalValue) ||
+                        (curr.totalValue < prev.totalValue && curr.totalValue < next.totalValue)) {
+                        significantEntries.add(olderEntries[i].id);
+                    }
+                }
+                // Time-based sampling: keep every 5th entry, but always keep significant ones
+                const timeBasedKeepers = new Set();
+                const fiveMinutesMs = 5 * 60 * 1000;
+                let lastKeptTime = 0;
+                for (const entry of olderEntries) {
+                    const entryTime = entry.entry.timestamp.getTime();
+                    // Always keep significant entries
+                    if (significantEntries.has(entry.id)) {
+                        timeBasedKeepers.add(entry.id);
+                        lastKeptTime = entryTime;
+                    }
+                    // Keep if enough time has passed (5 minutes) and we haven't kept a significant one recently
+                    else if (entryTime - lastKeptTime >= fiveMinutesMs) {
+                        timeBasedKeepers.add(entry.id);
+                        lastKeptTime = entryTime;
+                    }
+                    // Otherwise, mark for deletion (delete 4/5 as requested)
+                    else {
+                        toDelete.push(entry.id);
+                    }
+                }
+            }
+            // Phase 3: Delete everything older than 1 month
+            const veryOldEntries = entries.filter(e => (now - e.entry.timestamp.getTime()) > oneMonthMs);
+            for (const entry of veryOldEntries) {
+                toDelete.push(entry.id);
+            }
+            // Delete old entries
+            for (const id of toDelete) {
+                await portfolioHistoryDB.delete(id);
+            }
+            if (toDelete.length > 0) {
+                console.log(`Cleaned up ${toDelete.length} old portfolio entries for user ${userId}`);
+            }
+        }
+    }
+    catch (error) {
+        console.error('Error cleaning up portfolio history:', error);
+    }
+}
+// Periodic portfolio snapshot saving (every minute for high resolution)
+setInterval(async () => {
+    try {
+        console.log('Taking periodic portfolio snapshots...');
+        const allUserIds = await portfoliosDB.allKeys();
+        for (const userId of allUserIds) {
+            const portfolio = await portfoliosDB.get(userId);
+            if (portfolio) {
+                await savePortfolioSnapshot(userId, portfolio);
+            }
+        }
+        console.log(`Saved portfolio snapshots for ${allUserIds.length} users`);
+    }
+    catch (error) {
+        console.error('Error taking periodic portfolio snapshots:', error);
+    }
+}, 60 * 1000); // Every minute
+// Clean up old portfolio data every 10 minutes
+setInterval(async () => {
+    await cleanupPortfolioHistory();
+}, 10 * 60 * 1000); // Every 10 minutes
 function generateId() {
     return crypto.randomBytes(16).toString('hex');
 }
@@ -3259,6 +3427,8 @@ async function handleTradingAPI(req, res) {
                 if (!portfolio) {
                     portfolio = { cash: 10000, holdings: {} };
                     await portfoliosDB.set(userId, portfolio);
+                    // Save initial portfolio snapshot
+                    await savePortfolioSnapshot(userId, portfolio);
                 }
                 const portfolioWithGains = marketEngine.getPortfolioWithGains(portfolio, marketEngine.coins);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -3447,6 +3617,135 @@ async function handleTradingAPI(req, res) {
                     console.error('Error getting market events:', error);
                     res.writeHead(500, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ error: 'Failed to get market events' }));
+                }
+            }
+            break;
+        case '/api/trading/portfolio-history':
+            if (req.method === 'GET') {
+                try {
+                    const url = new URL(req.url, `http://${req.headers.host}`);
+                    const timeframe = url.searchParams.get('timeframe') || '1day';
+                    let limit = parseInt(url.searchParams.get('limit') || '24'); // Default to 24 data points
+                    // Get user's current portfolio to ensure we have one
+                    let portfolio = await portfoliosDB.get(userId);
+                    if (!portfolio) {
+                        portfolio = { cash: 10000, holdings: {} };
+                        await portfoliosDB.set(userId, portfolio);
+                        // Save initial snapshot
+                        await savePortfolioSnapshot(userId, portfolio);
+                    }
+                    const portfolioWithGains = marketEngine.getPortfolioWithGains(portfolio, marketEngine.coins);
+                    // Calculate timeframe boundaries
+                    const currentTime = new Date();
+                    let timeRangeMs = 0;
+                    switch (timeframe) {
+                        case '5min':
+                            timeRangeMs = 5 * 60 * 1000; // 5 minutes
+                            break;
+                        case '10min':
+                            timeRangeMs = 10 * 60 * 1000; // 10 minutes
+                            break;
+                        case '30min':
+                            timeRangeMs = 30 * 60 * 1000; // 30 minutes
+                            break;
+                        case '1hour':
+                            timeRangeMs = 60 * 60 * 1000; // 1 hour
+                            break;
+                        case '4hour':
+                            timeRangeMs = 4 * 60 * 60 * 1000; // 4 hours
+                            break;
+                        case '8hour':
+                            timeRangeMs = 8 * 60 * 60 * 1000; // 8 hours
+                            break;
+                        case '1day':
+                            timeRangeMs = 24 * 60 * 60 * 1000; // 1 day
+                            break;
+                        case '4day':
+                            timeRangeMs = 4 * 24 * 60 * 60 * 1000; // 4 days
+                            break;
+                        case '1week':
+                            timeRangeMs = 7 * 24 * 60 * 60 * 1000; // 1 week
+                            break;
+                        case '1month':
+                            timeRangeMs = 30 * 24 * 60 * 60 * 1000; // 1 month
+                            break;
+                    }
+                    const startTime = new Date(currentTime.getTime() - timeRangeMs);
+                    // Get actual portfolio history from database
+                    const allHistoryIds = await portfolioHistoryDB.allKeys();
+                    const userHistoryIds = allHistoryIds.filter(id => id.startsWith(userId + '-'));
+                    let historyEntries = [];
+                    for (const historyId of userHistoryIds) {
+                        const entry = await portfolioHistoryDB.get(historyId);
+                        if (entry && entry.timestamp >= startTime) {
+                            historyEntries.push(entry);
+                        }
+                    }
+                    // Sort by timestamp (oldest first)
+                    historyEntries.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+                    // Downsample data if we have too many points for the requested limit
+                    if (historyEntries.length > limit && limit > 0) {
+                        const step = Math.floor(historyEntries.length / limit);
+                        const downsampledEntries = [];
+                        for (let i = 0; i < historyEntries.length; i += step) {
+                            downsampledEntries.push(historyEntries[i]);
+                        }
+                        // Always include the last entry (most recent)
+                        if (historyEntries.length > 0 && downsampledEntries[downsampledEntries.length - 1] !== historyEntries[historyEntries.length - 1]) {
+                            downsampledEntries.push(historyEntries[historyEntries.length - 1]);
+                        }
+                        historyEntries = downsampledEntries;
+                    }
+                    // If we don't have enough historical data, add current portfolio as latest point
+                    if (historyEntries.length === 0) {
+                        // Save current snapshot first
+                        await savePortfolioSnapshot(userId, portfolio);
+                        // Add current portfolio values
+                        const currentHoldingsValue = Object.entries(portfolioWithGains.holdings).reduce((sum, [coinId, holding]) => {
+                            return sum + holding.totalValue;
+                        }, 0);
+                        historyEntries = [{
+                                userId,
+                                timestamp: currentTime,
+                                totalValue: portfolioWithGains.totalValue,
+                                holdingsValue: currentHoldingsValue,
+                                cashValue: portfolioWithGains.cash,
+                                holdings: Object.entries(portfolioWithGains.holdings).reduce((acc, [coinId, holding]) => {
+                                    acc[coinId] = {
+                                        amount: holding.amount,
+                                        value: holding.totalValue,
+                                        avgCost: holding.avgCost
+                                    };
+                                    return acc;
+                                }, {})
+                            }];
+                    }
+                    // Convert to API format
+                    const history = historyEntries.map(entry => ({
+                        timestamp: entry.timestamp.toISOString(),
+                        totalValue: entry.totalValue,
+                        holdingsValue: entry.holdingsValue,
+                        cashValue: entry.cashValue
+                    }));
+                    const currentHoldingsValue = Object.entries(portfolioWithGains.holdings).reduce((sum, [coinId, holding]) => {
+                        return sum + holding.totalValue;
+                    }, 0);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: true,
+                        history,
+                        timeframe,
+                        current: {
+                            totalValue: portfolioWithGains.totalValue,
+                            holdingsValue: currentHoldingsValue,
+                            cashValue: portfolioWithGains.cash
+                        }
+                    }));
+                }
+                catch (error) {
+                    console.error('Error getting portfolio history:', error);
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Failed to get portfolio history' }));
                 }
             }
             break;

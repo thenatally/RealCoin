@@ -64,7 +64,7 @@
 				
 				if (loginResponse.success && loginResponse.account) {
 					account.set(loginResponse.account);
-					goto('/trading');
+					goto('/market');
 				} else {
 					
 					goto('/login?message=Account created successfully. Please log in.');

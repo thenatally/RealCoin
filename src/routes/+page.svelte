@@ -6,7 +6,7 @@
 	onMount(() => {
 		
 		if ($account.account) {
-			goto('/trading');
+			goto('/market');
 		}
 	});
 </script>

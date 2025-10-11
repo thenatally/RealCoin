@@ -13,7 +13,7 @@
 	let error = '';
 	let success = '';
 
-	let redirectUrl = '/trading';
+	let redirectUrl = '/market';
 
 	onMount(() => {
 		

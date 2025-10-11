@@ -49,10 +49,10 @@
 				<div class="flex items-center justify-between h-16">
 					<div class="flex items-center gap-8">
 						<h1 class="text-xl font-semibold text-foreground">
-							<a href="/trading" class="hover:text-primary transition-colors">RealCoin</a>
+							<a href="/market" class="hover:text-primary transition-colors">RealCoin</a>
 						</h1>
 						<div class="hidden md:flex items-center gap-6">
-							<a href="/trading" class="text-sm text-muted-foreground hover:text-foreground transition-colors">Trading</a>
+							<a href="/market" class="text-sm text-muted-foreground hover:text-foreground transition-colors">Trading</a>
 							<a href="/leaderboard" class="text-sm text-muted-foreground hover:text-foreground transition-colors">Leaderboard</a>
 						</div>
 					</div>

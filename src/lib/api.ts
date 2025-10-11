@@ -371,5 +371,25 @@ export const trading = {
 		}
 	}> {
 		return tradingApiRequest(`/user/${encodeURIComponent(username)}`);
+	},
+
+	async getPortfolioHistory(
+		timeframe: '5min' | '10min' | '30min' | '1hour' | '4hour' | '8hour' | '1day' | '4day' | '1week' | '1month' = '1day', 
+		limit: number = 24
+	): Promise<TradingApiResponse & { 
+		history?: Array<{
+			timestamp: string;
+			totalValue: number;
+			holdingsValue: number;
+			cashValue: number;
+		}>;
+		timeframe: string;
+		current: {
+			totalValue: number;
+			holdingsValue: number;
+			cashValue: number;
+		};
+	}> {
+		return tradingApiRequest(`/portfolio-history?timeframe=${timeframe}&limit=${limit}`);
 	}
 };

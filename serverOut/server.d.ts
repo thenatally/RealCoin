@@ -8,6 +8,18 @@ export type PriceHistoryData = {
     close: number;
     volume: number;
 };
+export type PortfolioHistoryData = {
+    userId: string;
+    timestamp: Date;
+    totalValue: number;
+    holdingsValue: number;
+    cashValue: number;
+    holdings: Record<string, {
+        amount: number;
+        value: number;
+        avgCost: number;
+    }>;
+};
 declare class PriceHistoryManager {
     priceData: Map<string, Array<{
         price: number;
